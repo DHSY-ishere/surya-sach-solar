@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dashboard · Surya Sach</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='8' fill='%23d9480f'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;600;700&family=Instrument+Serif&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css?v=4">
+<style>
+  .picker { display: flex; gap: 10px; flex-wrap: wrap; padding: 14px 0 10px; }
+  .picker button { font: 600 14px var(--sans); color: var(--ink-2); background: rgba(255,255,255,.06); border: 1px solid var(--glass-edge); padding: 9px 16px; cursor: pointer; border-radius: 999px; -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); }
+  .picker button:hover { color: var(--ink); border-color: rgba(255,255,255,.3); }
+  .picker button[aria-pressed="true"] { background: var(--sun); color: #0a0f1c; border-color: var(--sun); box-shadow: 0 8px 22px rgba(255,210,31,.28); }
+  .picker button .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 8px; background: var(--sun); }
+  .picker button[aria-pressed="true"] .dot { background: #0a0f1c; }
+  .picker button .dot.short { background: var(--bad); }
+  .headline { padding: 40px 0 12px; }
+  .headline h1 { font: 400 clamp(36px, 5.6vw, 64px)/1.08 var(--serif); letter-spacing: -0.02em; margin: 0 0 16px; max-width: 20ch; }
+  .headline h1.bad { color: var(--bad); } .headline h1.ok { color: var(--sun); }
+  .headline p { color: var(--ink-2); margin: 0; max-width: 64ch; line-height: 1.75; }
+  .ledger { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 8px; padding: 26px 30px; margin: 34px 0; }
+  .ledger div { padding: 8px 18px 8px 0; }
+  .ledger b { display: block; font: 400 40px/1.1 var(--serif); font-variant-numeric: tabular-nums; margin-bottom: 8px; }
+  .ledger span { font-size: 14px; line-height: 1.55; color: var(--ink-2); display: block; }
+  .panel { padding: 34px 36px; margin: 0 0 32px; }
+  .panel h2 { font: 400 32px/1.15 var(--serif); margin: 0 0 12px; }
+  .panel .sub { color: var(--ink-2); font-size: 15.5px; margin: 0 0 24px; max-width: 70ch; line-height: 1.75; }
+  .legend { display: flex; gap: 26px; flex-wrap: wrap; font-size: 13.5px; color: var(--ink-2); margin: 16px 0 0; }
+  .legend i { display: inline-block; width: 18px; height: 3px; margin-right: 8px; vertical-align: middle; background: var(--sun); }
+  .legend i.band { height: 10px; background: #fff; opacity: .22; border-radius: 3px; } .legend i.rain { width: 3px; height: 12px; background: var(--rain); }
+  .tip { position: absolute; pointer-events: none; background: var(--sun); color: #0a0f1c; font-weight: 600; font-size: 13px; padding: 7px 11px; border-radius: 8px; transform: translate(-50%, -115%); white-space: nowrap; display: none; z-index: 5; }
+  .chartbox { position: relative; margin-top: 8px; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 24px; margin-top: 8px; }
+  .card { padding: 24px 26px; }
+  .card h3 { font: 400 26px/1.2 var(--serif); margin: 0 0 12px; text-transform: capitalize; }
+  .card p { margin: 0 0 10px; color: var(--ink-2); font-size: 15.5px; line-height: 1.7; }
+  .conf { height: 6px; background: var(--paper-2); margin: 4px 0 16px; border-radius: 999px; overflow: hidden; } .conf i { display: block; height: 100%; background: var(--sun); border-radius: 999px; }
+  table.rd { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; font-size: 15px; }
+  table.rd th { text-align: right; font-weight: 600; font-size: 13.5px; color: var(--ink-2); padding: 14px 14px; border-bottom: 1px solid var(--rule); position: sticky; top: 0; background: #0b1325; }
+  table.rd th:first-child, table.rd td:first-child { text-align: left; }
+  table.rd td { text-align: right; padding: 12px 14px; border-bottom: 1px solid var(--rule); }
+  table.rd td.low { color: var(--bad); font-weight: 600; }
+  .scroll { max-height: 380px; overflow: auto; padding: 0 6px; }
+  .banner { font-size: 14px; color: var(--ink-2); border-left: 3px solid var(--sun); padding: 8px 14px; margin: 20px 0 0; background: rgba(255,255,255,.05); border-radius: 0 10px 10px 0; max-width: 62ch; line-height: 1.6; }
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 44px; } @media (max-width: 760px) { .two { grid-template-columns: 1fr; gap: 28px; } }
+  .claimbar { position: relative; height: 16px; background: var(--paper-2); margin: 22px 0 12px; border-radius: 999px; }
+  .claimbar i { position: absolute; top: 0; bottom: 0; } .claimbar b { position: absolute; top: -6px; bottom: -6px; width: 3px; background: var(--bad); }
+  .cta { display: grid; grid-template-columns: 1.6fr 1fr; gap: 36px; align-items: center; } @media (max-width: 760px) { .cta { grid-template-columns: 1fr; gap: 20px; } }
+  .cta .note { margin-top: 14px; }
+  @media (max-width: 640px) { .panel { padding: 24px 20px; } .ledger { padding: 20px; } }
+</style>
+<script src="config.js"></script>
+</head>
+<body>
+<div class="wrap">
+  <nav>
+    <a class="brand" href="index.html">Surya Sach</a>
+    <div class="links"><a href="index.html#scorecard">Installer scorecard</a><a href="index.html">Promise check</a><a class="wa" data-wa="dashboard" href="#">Chat on WhatsApp</a></div>
+  </nav>
+  <div class="picker" id="picker" role="tablist" aria-label="Choose a system"></div>
+  <div id="view"><p style="padding:40px 0">Loading…</p></div>
+  <footer>Ranges are engineering estimates (performance ratio 0.72 to 0.80, heat-derated), not legal findings.</footer>
+</div>
+<script src="dashboard.js?v=4"></script>
+</body>
+</html>

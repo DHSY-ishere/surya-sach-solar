@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Verify an evidence pack · Surya Sach</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='8' fill='%23d9480f'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;600;700&family=Instrument+Serif&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css?v=4">
+<script src="config.js"></script>
+</head>
+<body>
+<div class="wrap">
+  <nav><a class="brand" href="index.html">Surya Sach</a></nav>
+  <main id="out"><p style="padding:40px 0">Checking the pack…</p></main>
+</div>
+<script>
+const API = (window.SURYA_API || "").replace(/\/$/, "");
+const id = new URLSearchParams(location.search).get("id") || "";
+const out = document.getElementById("out");
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+function chart(rows) {
+  const W = 800, H = 280, L = 40, B = 28, T = 12, R = 8;
+  const top = Math.ceil(Math.max(...rows.map((r) => Math.max(r.actual_kwh, r.expected_high || 0)))) + 1;
+  const x = (i) => L + (i / Math.max(rows.length - 1, 1)) * (W - L - R);
+  const y = (v) => H - B - (v / top) * (H - B - T);
+  const path = (f) => rows.map((r, i) => (f(r) == null ? "" : `${i && rows[i - 1] && f(rows[i - 1]) != null ? "L" : "M"}${x(i).toFixed(1)},${y(f(r)).toFixed(1)}`)).join("");
+  const band = rows.filter((r) => r.expected_high != null);
+  const poly = band.map((r) => `${x(rows.indexOf(r))},${y(r.expected_high)}`).concat(band.slice().reverse().map((r) => `${x(rows.indexOf(r))},${y(r.expected_low)}`)).join(" ");
+  let grid = "";
+  for (let v = 0; v <= top; v += 2) grid += `<line x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}" stroke="var(--rule)"/><text x="${L - 6}" y="${y(v) + 4}" text-anchor="end" font-size="11" fill="var(--ink-2)">${v}</text>`;
+  return `<svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="Daily output versus healthy band">${grid}
+    <polygon points="${poly}" fill="#ffffff" opacity=".13"/><path d="${path((r) => r.actual_kwh)}" fill="none" stroke="var(--sun)" stroke-width="2.5"/>
+    <text x="${L}" y="${H - 6}" font-size="12" fill="var(--ink-2)">${esc(rows[0].date)}</text><text x="${W - R}" y="${H - 6}" text-anchor="end" font-size="12" fill="var(--ink-2)">${esc(rows[rows.length - 1].date)}</text></svg>
+    <p class="note">Yellow: units the system actually made each day. Pale band: what a healthy system at this roof should have made.</p>`;
+}
+
+async function run() {
+  if (!id) { out.innerHTML = '<p class="fatal">No pack ID in the link.</p>'; return; }
+  let d;
+  try { const r = await fetch(`${API}/api/verify?id=${encodeURIComponent(id)}`); d = await r.json(); if (!r.ok) throw 0; }
+  catch (e) { out.innerHTML = '<p class="fatal">We have no record of this pack. If you were handed this PDF, treat it as unverified.</p>'; return; }
+  const dg = d.diagnosis || {};
+  const findings = (dg.findings || []).map((f) => `<p><b>${esc(f.cause.replace(/_/g, " "))}</b> (${Math.round(f.confidence * 100)}%): ${esc(f.advice)}</p>`).join("");
+  out.innerHTML = `
+    <div class="seal ${d.intact ? "intact" : "broken"}"><div class="mark">${d.intact ? "✓" : "✕"}</div>
+      <div><h2>${d.intact ? "This pack is unaltered." : "This pack does NOT match its record."}</h2>
+      <div class="note">${d.intact ? "The record we stored hashes to the ID in the link." : "The stored record no longer hashes to the ID in the link. Do not rely on this PDF."}</div></div></div>
+    ${d.simulated ? '<p><b>Demonstration data:</b> readings in this pack are simulated.</p>' : ""}
+    <dl class="facts">
+      <dt>System</dt><dd>${esc(d.kwp)} kWp, ${esc(d.place || "location on file")}</dd>
+      <dt>Installer</dt><dd>${esc(d.vendor || "not stated")}</dd>
+      <dt>Promised</dt><dd>${d.promised_kwh_day ? esc(d.promised_kwh_day) + " units/day" : "not recorded"}</dd>
+      <dt>Record</dt><dd>${d.days} days · ${d.photos} with a stored photo hash · ${d.nasa_checked} confirmed against NASA POWER</dd>
+      <dt>Shortfall</dt><dd>${esc(Math.round(dg.shortfall_pct))}% on the latest day, about Rs ${Number(dg.lost_inr_month).toLocaleString("en-IN")} a month</dd>
+      <dt>Issued</dt><dd>${esc(d.created_at)} · owner ${esc(d.owner)}</dd>
+      <dt>Pack ID</dt><dd><code>${esc(d.id)}</code></dd>
+      <dt>PDF SHA-256</dt><dd><code>${esc(d.pdf_sha256)}</code></dd>
+    </dl>
+    ${findings}${d.rows.length ? chart(d.rows) : ""}
+    ${d.pdf_url ? `<p><a href="${esc(d.pdf_url)}"><b>Download the original PDF</b></a>, then compare its SHA-256 with the value above.</p>` : ""}`;
+}
+run();
+</script>
+</body>
+</html>
