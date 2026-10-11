@@ -1,0 +1,267 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: Surya Sach - WhatsApp-first rooftop solar verification (Waste and Energy track)
+
+Parameters:
+  WaVerifyToken:
+    Type: String
+    NoEcho: true
+    Description: Any secret string you also paste into the Meta webhook configuration
+  WaAppSecret:
+    Type: String
+    NoEcho: true
+    Description: Meta app secret (used to verify webhook signatures)
+  WaToken:
+    Type: String
+    NoEcho: true
+    Description: WhatsApp Cloud API access token
+  WaPhoneId:
+    Type: String
+    Description: WhatsApp phone number ID of the test number
+  DashSecret:
+    Type: String
+    NoEcho: true
+    Default: ""
+    Description: Random key that signs owners' private dashboard links
+  PublicBaseUrl:
+    Type: String
+    Default: ""
+    Description: Public https address of the website (Amplify Hosting). Empty falls back to the S3 website URL.
+  EnableAgent:
+    Type: String
+    Default: "1"
+    AllowedValues: ["0", "1"]
+  VisionModel:
+    Type: String
+    Default: apac.amazon.nova-lite-v1:0
+  ChatModel:
+    Type: String
+    Default: apac.amazon.nova-lite-v1:0
+
+Conditions:
+  HasBaseUrl: !Not [!Equals [!Ref PublicBaseUrl, ""]]
+
+Globals:
+  Function:
+    Runtime: python3.12
+    Architectures: [x86_64]
+    CodeUri: app/
+    Timeout: 60
+    MemorySize: 512
+    Tracing: Active
+    Environment:
+      Variables:
+        TABLE_NAME: !Ref Table
+        BUCKET: !Ref DataBucket
+        PUBLIC_BASE_URL: !If [HasBaseUrl, !Ref PublicBaseUrl, !GetAtt WebBucket.WebsiteURL]
+        BEDROCK_VISION_MODEL: !Ref VisionModel
+        BEDROCK_CHAT_MODEL: !Ref ChatModel
+        ENABLE_AGENT: !Ref EnableAgent
+
+Resources:
+  # ------------------------------------------------------------------ data
+  Table:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - {AttributeName: pk, AttributeType: S}
+        - {AttributeName: sk, AttributeType: S}
+      KeySchema:
+        - {AttributeName: pk, KeyType: HASH}
+        - {AttributeName: sk, KeyType: RANGE}
+      TimeToLiveSpecification: {AttributeName: ttl, Enabled: true}
+      PointInTimeRecoverySpecification: {PointInTimeRecoveryEnabled: true}
+
+  DataBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault: {SSEAlgorithm: AES256}
+
+  # ------------------------------------------------------------------ queue (FIFO keeps each chat in order)
+  Dlq:
+    Type: AWS::SQS::Queue
+    Properties:
+      FifoQueue: true
+      MessageRetentionPeriod: 1209600
+
+  Queue:
+    Type: AWS::SQS::Queue
+    Properties:
+      FifoQueue: true
+      ContentBasedDeduplication: false
+      VisibilityTimeout: 180
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt Dlq.Arn
+        maxReceiveCount: 3
+
+  # ------------------------------------------------------------------ API
+  Api:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      CorsConfiguration:
+        AllowOrigins: ["*"]
+        AllowMethods: [GET]
+        AllowHeaders: ["*"]
+
+  IngestFn:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: handlers.ingest.handler
+      Timeout: 10
+      Environment:
+        Variables:
+          QUEUE_URL: !Ref Queue
+          WA_VERIFY_TOKEN: !Ref WaVerifyToken
+          WA_APP_SECRET: !Ref WaAppSecret
+      Policies:
+        - SQSSendMessagePolicy: {QueueName: !GetAtt Queue.QueueName}
+      Events:
+        Get:
+          Type: HttpApi
+          Properties: {ApiId: !Ref Api, Path: /webhook, Method: GET}
+        Post:
+          Type: HttpApi
+          Properties: {ApiId: !Ref Api, Path: /webhook, Method: POST}
+
+  WorkerFn:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: handlers.worker.handler
+      Timeout: 120
+      MemorySize: 1024
+      Environment:
+        Variables:
+          WA_TOKEN: !Ref WaToken
+          WA_PHONE_ID: !Ref WaPhoneId
+          WA_APP_SECRET: !Ref WaAppSecret
+          DASH_SECRET: !Ref DashSecret
+      Policies:
+        - DynamoDBCrudPolicy: {TableName: !Ref Table}
+        - S3CrudPolicy: {BucketName: !Ref DataBucket}
+        - Statement:
+            - Effect: Allow
+              Action: [textract:DetectDocumentText, polly:SynthesizeSpeech]
+              Resource: "*"
+            - Effect: Allow
+              Action: [bedrock:InvokeModel, bedrock:InvokeModelWithResponseStream, bedrock:Converse]
+              Resource: "*"
+      Events:
+        Sqs:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt Queue.Arn
+            BatchSize: 5
+            FunctionResponseTypes: [ReportBatchItemFailures]
+
+  PublicApiFn:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: handlers.public_api.handler
+      Timeout: 30
+      Environment:
+        Variables:
+          WA_TOKEN: unused
+          WA_PHONE_ID: unused
+          WA_APP_SECRET: !Ref WaAppSecret
+          DASH_SECRET: !Ref DashSecret
+      Policies:
+        - DynamoDBReadPolicy: {TableName: !Ref Table}
+        - S3ReadPolicy: {BucketName: !Ref DataBucket}
+      Events:
+        Vendors:
+          Type: HttpApi
+          Properties: {ApiId: !Ref Api, Path: /api/vendors, Method: GET}
+        Verify:
+          Type: HttpApi
+          Properties: {ApiId: !Ref Api, Path: /api/verify, Method: GET}
+        Promise:
+          Type: HttpApi
+          Properties: {ApiId: !Ref Api, Path: /api/promise, Method: GET}
+        Systems:
+          Type: HttpApi
+          Properties: {ApiId: !Ref Api, Path: /api/systems, Method: GET}
+        Me:
+          Type: HttpApi
+          Properties: {ApiId: !Ref Api, Path: /api/me, Method: GET}
+
+  # ------------------------------------------------------------------ scheduled jobs
+  NudgeFn:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: handlers.nudge.handler
+      Environment:
+        Variables:
+          WA_TOKEN: !Ref WaToken
+          WA_PHONE_ID: !Ref WaPhoneId
+      Policies:
+        - DynamoDBReadPolicy: {TableName: !Ref Table}
+      Events:
+        Evening:
+          Type: ScheduleV2
+          Properties:
+            ScheduleExpression: cron(0 19 * * ? *)
+            ScheduleExpressionTimezone: Asia/Kolkata
+
+  AuditFn:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: handlers.audit.handler
+      Timeout: 300
+      Environment:
+        Variables:
+          WA_TOKEN: unused
+          WA_PHONE_ID: unused
+      Policies:
+        - DynamoDBCrudPolicy: {TableName: !Ref Table}
+      Events:
+        Night:
+          Type: ScheduleV2
+          Properties:
+            ScheduleExpression: cron(30 2 * * ? *)
+            ScheduleExpressionTimezone: Asia/Kolkata
+
+  # ------------------------------------------------------------------ website (scorecard + verify + promise check)
+  # Served straight from S3 website hosting (CloudFront needs account verification on new accounts).
+  WebBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      WebsiteConfiguration:
+        IndexDocument: index.html
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        IgnorePublicAcls: true
+        BlockPublicPolicy: false
+        RestrictPublicBuckets: false
+
+  WebBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref WebBucket
+      PolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal: "*"
+            Action: s3:GetObject
+            Resource: !Sub "${WebBucket.Arn}/*"
+
+Outputs:
+  WebhookUrl:
+    Description: Paste into Meta WhatsApp > Configuration > Webhook (callback URL)
+    Value: !Sub "https://${Api}.execute-api.${AWS::Region}.amazonaws.com/webhook"
+  ApiUrl:
+    Description: Written into web/config.js by deploy.ps1
+    Value: !Sub "https://${Api}.execute-api.${AWS::Region}.amazonaws.com"
+  SiteUrl:
+    Value: !GetAtt WebBucket.WebsiteURL
+  WebBucketName:
+    Value: !Ref WebBucket
+  TableName:
+    Value: !Ref Table
