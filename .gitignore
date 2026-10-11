@@ -1,0 +1,33 @@
+# build and tooling
+__pycache__/
+*.pyc
+.pytest_cache/
+.aws-sam/
+samconfig.toml
+node_modules/
+.venv/
+venv/
+
+# local runs and generated output
+out/
+*.mp3
+*.pdf
+
+# editor / assistant files
+.vscode/
+.idea/
+.claude/
+SKILL.md
+
+# secrets, never commit
+.env
+.env.*
+*.pem
+*.key
+credentials
+.aws/
+
+# working notes and drafts (not part of the product)
+MASTER_PLAN.md
+DEMO_SCRIPT.md
+BLOG_DRAFT.md
